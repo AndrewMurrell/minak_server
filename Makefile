@@ -1,5 +1,8 @@
-CFLAGS = -std=gnu99 -Wall -Wextra -Werror -Wno-unused-params 
+CFLAGS = -g -std=gnu99 -Wall -Wextra -Werror
 
 all: minak-server
 
 minak-server: -lpq
+
+clean:
+	rm -f minak-server

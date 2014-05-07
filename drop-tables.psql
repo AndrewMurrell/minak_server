@@ -1,0 +1,5 @@
+drop table gesture_libraries;
+drop table gesture_entries;
+drop table gestures;
+drop table gesture_strokes;
+drop table gesture_points;

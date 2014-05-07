@@ -1,0 +1,5 @@
+create table gesture_libraries (id SERIAL, bs integer);
+create table gesture_entries (id SERIAL, library_id integer, name text);
+create table gestures (id SERIAL, entry_id integer);
+create table gesture_strokes (id SERIAL, gesture_id integer);
+create table gesture_points (id SERIAL, stroke_id integer, x integer, y integer, time bigint);
