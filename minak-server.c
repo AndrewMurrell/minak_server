@@ -4,15 +4,15 @@
 #include <stdlib.h>
 #include <libpq-fe.h>
 
-#define GET(fd, var)							\
-	do {								\
-		if (read(fd, &(var), sizeof(var)) != sizeof(var))	\
-			return 1;					\
+#define GET(fd, var)                                                          \
+	do {                                                                      \
+		if (read(fd, &(var), sizeof(var)) != sizeof(var))                     \
+			return 1;                                                         \
 	} while (0)
 
-#define DONTPANIC(res, conn, cond)                                                  \
+#define DONTPANIC(res, conn, cond)                                            \
 	do {                                                                      \
-		if (PQresultStatus(res) != cond) {                         \
+		if (PQresultStatus(res) != cond) {                                    \
 			fprintf(stderr, "Query Failed: %s", PQerrorMessage(conn));        \
 			PQclear(res);                                                     \
 			exit_nicely(conn);                                                \
