@@ -162,9 +162,15 @@ int int main(int argc, char const *argv[]) {
 		exit_nicely(conn);
 	}
 
+///////////////////*
+
+http://www.postgresql.org/docs/current/static/libpq-example.html
+http://www.postgresql.org/docs/9.0/static/libpq-exec.html
+http://www.postgresql.org/docs/6.4/static/libpq-chapter16943.htm
+http://stackoverflow.com/questions/2944297/postgresql-function-for-last-inserted-id
 
 
-
+/////////////////*/
 	/*
 	 * Should PQclear PGresult whenever it is no longer needed to avoid memory
 	 * leaks
