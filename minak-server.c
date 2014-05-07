@@ -4,47 +4,72 @@
 #include <stdlib.h>
 #include <libpq-fe.h>
 
-#define GET(fd, var)                                                          \
-	do {                                                                      \
-		if (read(fd, &(var), sizeof(var)) != sizeof(var))                     \
-			return 1;                                                         \
+#define GET(fd, var)							\
+	do {								\
+		if (read(fd, &(var), sizeof(var)) != sizeof(var))	\
+			return 1;					\
 	} while (0)
 
-#define DONTPANIC(res, conn, cond)                                            \
-	do {                                                                      \
-		if (PQresultStatus(res) != cond) {                                    \
-			fprintf(stderr, "Query Failed: %s", PQerrorMessage(conn));        \
-			PQclear(res);                                                     \
-			exit_nicely(conn);                                                \
-		}                                                                     \
-	} while (0)
+#define COUNT(ary) (sizeof(ary)/sizeof((ary)[0]))
+
+#define PG_EXEC(conn, command)					\
+	({							\
+		PGresult *res = PQexec(conn, command);		\
+		if (PQresultStatus(res) != PGRES_TUPLES_OK) {	\
+			PQclear(res);				\
+			return 1;				\
+		}						\
+		int val = atoi(PQgetvalue(res, 0, 1));		\
+		PQclear(res);					\
+		val;						\
+	})
+
+
+#define PG_EXEC_PARAMS(conn, command, ...)				\
+	({								\
+		char *params[] = { __VA_ARGS__ };			\
+		PGresult *res = PQexecParams(conn, command,		\
+			COUNT(params), /* nParams */			\
+			NULL, /* paramTypes */				\
+			(const char * const *)params, /* paramValues */ \
+			NULL, /* paramLengths */			\
+			NULL, /* paramFormats */			\
+			0); /* resultFormat */				\
+		if (PQresultStatus(res) != PGRES_TUPLES_OK) {		\
+			PQclear(res);					\
+			return 1;					\
+		}							\
+		int val = atoi(PQgetvalue(res, 0, 1));			\
+		PQclear(res);						\
+		val;							\
+	})
+
 
 struct gesture_store {
 	uint16_t file_format;
 	uint32_t num_entries;
 };
 
-/*
- *	SQL Library Functions
- */
-static void
-exit_nicely(PGconn *conn) {
-	PQfinish(conn);
-	exit(1);
+char itoa_buf[64];
+char *itoa(int i) {
+	snprintf(itoa_buf, 63, "%d", i);
+	return itoa_buf;
 }
+
+int load_gesture_point(int fd, PGconn *conn, int stroke_id);
+int load_gesture_stroke(int fd, PGconn* conn, int gesture_id);
+int load_gesture(int fd, PGconn* conn, int entry_id);
+int load_gesture_entry(int fd, PGconn* conn, int store_id);
 
 int
 _load_gesture_store(int fd, PGconn* conn, int *store_id) {
 	struct gesture_store store;
 	GET(fd, store);
 
-	PGResult *res = PQexec(conn, "INSERT INTO gesture_libraries RETURNING id"); //SQL: INSERT VALUES() INTO gesture_libraries;
-	DONTPANIC(res, conn, PGRES_TUPLES_OK);
-	store_id = atoi(PQgetvalue(PGresult *res, 0, 1));
-	//TODO get the entry location ^^ assuming that's right
+	*store_id = PG_EXEC(conn, "INSERT INTO gesture_libraries RETURNING id");
 
 	for (size_t i = 0; i < store.num_entries; i++)
-		if (load_gesture_entry(fd, store_id) != 0) return 1;
+		if (load_gesture_entry(fd, conn, *store_id) != 0) return 1;
 	return 0;
 }
 
@@ -70,14 +95,14 @@ load_gesture_entry(int fd, PGconn* conn, int store_id) {
 	entry.name = calloc(entry.name_len, 1);
 	if (read(fd, entry.name, entry.name_len) != entry.name_len)
 		return 1;
-	GET(fd, entry.num_gestrues);
+	GET(fd, entry.num_gestures);
 
-	//int entry_id = ;// SQL: INSERT VALUES(name=name, library_id=store_id) INTO gesture_entries;
-	PQexec(conn, "INSERT VALUES(name=?, library_id=?) INTO gesture_entries", 2, {name, store_id});
-	DONTPANIC(res, conn, PGRES_TUPLES_OK);
+	int entry_id = PG_EXEC_PARAMS(conn,
+		"INSERT VALUES(name=$1::text, library_id=$2::integer) INTO gesture_entries RETURNING id",
+		entry.name, itoa(store_id));
 
 	for (size_t i = 0; i < entry.num_gestures; i++)
-		if (load_gesture(fd, entry_id) != 0) return 1;
+		if (load_gesture(fd, conn, entry_id) != 0) return 1;
 	return 0;
 }
 
@@ -91,11 +116,12 @@ load_gesture(int fd, PGconn* conn, int entry_id) {
 	struct gesture gesture;
 	GET(fd, gesture);
 
-	int gesture_id = ;// SQL: INSERT VALUES(entry_id=entry_id) INTO gestures;
-	DONTPANIC(res, conn, PGRES_TUPLES_OK);
+	int gesture_id = PG_EXEC_PARAMS(conn,
+		"INSERT VALUES(entry_id=$1::integer) INTO gestures RETURNING id",
+		itoa(entry_id));
 
 	for (size_t i = 0; i < gesture.num_strokes; i++)
-		if (load_gesture_stroke(fd, gesture_id) != 0) return 1;
+		if (load_gesture_stroke(fd, conn, gesture_id) != 0) return 1;
 	return 0;
 }
 
@@ -104,11 +130,12 @@ load_gesture_stroke(int fd, PGconn* conn, int gesture_id) {
 	uint32_t num_points;
 	GET(fd, num_points);
 
-	int stroke_id = ; // SQL: INSERT VALUES(gesture_id=gesture_id) INTO gesture_strokes;
-	DONTPANIC(res, conn, PGRES_TUPLES_OK);
+	int stroke_id = PG_EXEC_PARAMS(conn,
+		"INSERT VALUES(gesture_id=$1::integer) INTO gesture_strokes RETURNING id",
+		itoa(gesture_id));
 
 	for (size_t i = 0; i < num_points; i++)
-		if (load_gesture_point(fd, stroke_id) != 0) return 1;
+		if (load_gesture_point(fd, conn, stroke_id) != 0) return 1;
 	return 0;
 }
 
@@ -121,19 +148,26 @@ struct gesture_point {
 int load_gesture_point(int fd, PGconn* conn, int stroke_id) {
 	struct gesture_point point;
 	GET(fd, point);
-	// SQL: INSERT VALUES(x=point.x, y=point.y, time=point.time, stroke_id=stroke_id) INTO gesture_points;
-	DONTPANIC(res, conn, PGRES_TUPLES_OK);
-
+	PG_EXEC_PARAMS(conn,
+		"INSERT VALUES(x=$1::integer, y=$2::integer, time=$3::integer, stroke_id=$4::integer) INTO gesture_points RETURNING id",
+		itoa(point.x), itoa(point.y), itoa(point.time), itoa(stroke_id));
+	return 0;
 }
 
-int int main(int argc, char const *argv[]) {
+static void exit_nicely(PGconn *conn) {
+	PQfinish(conn);
+	exit(1);
+}
+
+int
+main(int argc, char **argv) {
 	//from http://www.postgresql.org/docs/current/static/libpq-example.html
 
 	const char *conninfo;
-	PGconn	 *conn;
+	PGconn     *conn;
 	PGresult   *res;
-	int		 nFields;
-	int		 i, j;
+	int        nFields;
+	int        i, j;
 
 	/*
 	 * If the user supplies a parameter on the command line, use it as the
@@ -144,7 +178,7 @@ int int main(int argc, char const *argv[]) {
 		conninfo = argv[1];
 	else
 		conninfo = "dbname = postgres";
-
+	
 	/* Make a connection to the database */
 	conn = PQconnectdb(conninfo);
 
@@ -162,15 +196,15 @@ int int main(int argc, char const *argv[]) {
 		exit_nicely(conn);
 	}
 
-///////////////////*
+/*
 
 http://www.postgresql.org/docs/current/static/libpq-example.html
 http://www.postgresql.org/docs/9.0/static/libpq-exec.html
 http://www.postgresql.org/docs/6.4/static/libpq-chapter16943.htm
 http://stackoverflow.com/questions/2944297/postgresql-function-for-last-inserted-id
 
+*/
 
-/////////////////*/
 	/*
 	 * Should PQclear PGresult whenever it is no longer needed to avoid memory
 	 * leaks
@@ -189,7 +223,10 @@ http://stackoverflow.com/questions/2944297/postgresql-function-for-last-inserted
 	PQclear(res);
 
 	res = PQexec(conn, "FETCH ALL in myportal");
-	DONTPANIC(res, conn, PGRES_TUPLES_OK);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+		PQclear(res);
+		exit_nicely(conn);
+	}
 
 
 	/* first, print out the attribute names */
@@ -220,3 +257,4 @@ http://stackoverflow.com/questions/2944297/postgresql-function-for-last-inserted
 
 	return 0;
 }
+
