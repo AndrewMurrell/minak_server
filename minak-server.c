@@ -43,7 +43,7 @@ nwrite(int fd, void *buf, size_t n) {
 #define defuck64(var) TODO
 
 #define refuck16(var) do { (var) = htons(var); } while(0)
-#define refuck32(var) do { (var) = htosl(var); } while(0)
+#define refuck32(var) do { (var) = htonl(var); } while(0)
 #define refuck64(var) TODO
 
 #define GET(fd, var)							\
@@ -93,7 +93,7 @@ static void exit_nicely(PGconn *conn) {
 		val;							\
 	})
 
-#define PG_QUERY(conn, command, ...)				\
+#define PG_QUERY(conn, command, ...)					\
 	({								\
 		char *params[] = { __VA_ARGS__ };			\
 		PGresult *res = PQexecParams(conn, command,		\
@@ -214,29 +214,27 @@ load_gesture_stroke(int fd, PGconn* conn, int gesture_id) {
 	return 0;
 }
 
+// these are all un-fucked, because they are not really integers
 struct gesture_point {
-	uint32_t x;
-	uint32_t y;
-	uint64_t time;
+	int32_t x;
+	int32_t y;
+	int64_t time;
 } __attribute__((packed));
 
 int
 load_gesture_point(int fd, PGconn* conn, int stroke_id) {
 	struct gesture_point point;
 	GET(fd, point);
-	defuck32(point.x);
-	defuck32(point.y);
-	//TODO: defuck64(point.time);
 
 	//TODO: xstrdup
-	char *s_stroke_id = strdup(itoa(stroke_id ));
-	char *s_x         = strdup(itoa(point.x   ));
-	char *s_y         = strdup(itoa(point.y   ));
-	char *s_time      = strdup(itoa(point.time));
+	char *s_stroke_id; asprintf(&s_stroke_id, "%d", stroke_id);
+	char *s_x        ; asprintf(&s_x, "%d", point.x);;
+	char *s_y        ; asprintf(&s_y, "%d", point.y);;
+	char *s_time     ; asprintf(&s_time, "%ld", point.time);
 
 	PG_EXEC_PARAMS(conn,
 		"INSERT INTO gesture_points "
-		"      (stroke_id  , x            , y            , time      ) "
+		"      (stroke_id  , x          , y          , time      ) "
 		"VALUES($1::integer, $2::integer, $3::integer, $4::bigint) "
 		"RETURNING id",
 		s_stroke_id, s_x, s_y, s_time);
@@ -248,6 +246,83 @@ load_gesture_point(int fd, PGconn* conn, int stroke_id) {
 
 	return 0;
 }
+
+
+void
+download(int fd, PGconn *conn, int id) {
+	char *buf;
+
+	dprintf(fd,
+		"Status: 200 Document follows\r\n"
+		"Content-Type: application/octet-stream\r\n"
+		"\r\n");
+	nwrite(fd, "\x00\x01", 2);
+	PGresult *entries = PG_QUERY(conn, "SELECT id, name FROM gesture_entries WHERE library_id = $1::integer", itoa(id));
+	int fnum_id   = PQfnumber(entries, "id");
+	int fnum_name = PQfnumber(entries, "name");
+
+	fprintf(stderr, "%d, %d, %d, %d\n\n", num_entries, num_gestures, num_strokes, num_points);
+
+	uint32_t num_entries = PQntuples(entries);
+	refuck32(num_entries);
+	nwrite(fd, &num_entries, sizeof(num_entries));
+	defuck32(num_entries);
+
+	for (size_t i = 0; i < num_entries; i++) {
+		buf = PQgetvalue(entries, i, fnum_name);
+		uint16_t len = strlen(buf);
+		refuck16(len);
+		nwrite(fd, &len, sizeof(len));
+		dprintf(fd, "%s", buf);
+		
+		buf = PQgetvalue(entries, i, fnum_id);
+		PGresult *gestures = PG_QUERY(conn, "SELECT id FROM gestures WHERE entry_id = $1::integer", buf);
+		uint32_t num_gestures = PQntuples(gestures);
+		refuck32(num_gestures);
+		nwrite(fd, &num_gestures, sizeof(num_gestures));
+		defuck32(num_gestures);
+
+		for (size_t j = 0; j < num_gestures; j++) {
+			buf = PQgetvalue(gestures, j, 0);
+
+			uint32_t gesture_id = atoi(buf);
+			refuck32(gesture_id);
+			nwrite(fd, "\0\0\0\0", 4);
+			nwrite(fd, &gesture_id, 4);
+
+			PGresult *strokes = PG_QUERY(conn, "SELECT id FROM gesture_strokes WHERE gesture_id = $1::integer", buf);
+			uint32_t num_strokes = PQntuples(strokes);
+			refuck32(num_strokes);
+			nwrite(fd, &num_strokes, sizeof(num_strokes));
+			defuck32(num_strokes);
+
+			for (size_t k = 0; k < num_strokes; k++) {
+				buf = PQgetvalue(strokes, k, 0);
+
+				PGresult *points = PG_QUERY(conn, "SELECT x, y, time FROM gesture_points WHERE stroke_id = $1::integer", buf);
+				uint32_t num_points = PQntuples(points);
+				refuck32(num_points);
+				nwrite(fd, &num_points, sizeof(num_points));
+				defuck32(num_points);
+				
+				int fnum_x = PQfnumber(points, "x");
+				int fnum_y = PQfnumber(points, "y");
+				int fnum_time = PQfnumber(points, "time");
+
+				for (size_t l; l < num_points; l++) {
+					int32_t x = atoi(PQgetvalue(entries, l, fnum_x));
+					int32_t y = atoi(PQgetvalue(entries, l, fnum_y));
+					int64_t t = atol(PQgetvalue(entries, l, fnum_time));
+
+					nwrite(fd, &x, sizeof(x));
+					nwrite(fd, &y, sizeof(y));
+					nwrite(fd, &t, sizeof(t));
+				}
+			}
+		}
+	}
+}
+
 
 void
 upload(int fd, PGconn* conn) {
@@ -302,7 +377,8 @@ main(int argc, char **argv) {
 	} else if (strcasecmp(method, "POST") == 0) {
 		upload(0, conn);
 	} else if (strcasecmp(method, "GET") == 0) {
-		/* TODO */
+		int id = atoi(getenv("QUERY_STRING"));
+		download(1, conn, id);
 	}
 
 	/* End the connection/transaction */
