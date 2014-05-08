@@ -38,13 +38,13 @@ nwrite(int fd, void *buf, size_t n) {
 	}
 }
 
-#define defuck16(var) do { (var) = ntohs(var); } while(0)
-#define defuck32(var) do { (var) = ntohl(var); } while(0)
-#define defuck64(var) TODO
+#define deflip16(var) do { (var) = ntohs(var); } while(0)
+#define deflip32(var) do { (var) = ntohl(var); } while(0)
+#define deflip64(var) TODO
 
-#define refuck16(var) do { (var) = htons(var); } while(0)
-#define refuck32(var) do { (var) = htonl(var); } while(0)
-#define refuck64(var) TODO
+#define reflip16(var) do { (var) = htons(var); } while(0)
+#define reflip32(var) do { (var) = htonl(var); } while(0)
+#define reflip64(var) TODO
 
 #define GET(fd, var)							\
 	do {								\
@@ -130,8 +130,8 @@ int
 _load_gesture_store(int fd, PGconn* conn, int *store_id) {
 	struct gesture_store store;
 	GET(fd, store);
-	defuck16(store.file_format);
-	defuck32(store.num_entries);
+	deflip16(store.file_format);
+	deflip32(store.num_entries);
 
 	*store_id = PG_EXEC(conn, "INSERT INTO gesture_libraries (bs) VALUES(1) RETURNING id");
 
@@ -160,14 +160,14 @@ load_gesture_entry(int fd, PGconn* conn, int store_id) {
 	struct gesture_entry entry;
 
 	GET(fd, entry.name_len);
-	defuck16(entry.name_len);
+	deflip16(entry.name_len);
 
 	entry.name = calloc(entry.name_len+1, 1);
 	nread(fd, entry.name, entry.name_len);
 	entry.name[entry.name_len] = '\0';
 
 	GET(fd, entry.num_gestures);
-	defuck32(entry.num_gestures);
+	deflip32(entry.num_gestures);
 
 	int entry_id = PG_EXEC_PARAMS(conn,
 		"INSERT INTO gesture_entries (name, library_id) VALUES($1::text, $2::integer) RETURNING id",
@@ -187,8 +187,8 @@ int
 load_gesture(int fd, PGconn* conn, int entry_id) {
 	struct gesture gesture;
 	GET(fd, gesture);
-	//TODO: defuck64(gesture.id);
-	defuck32(gesture.num_strokes);
+	//TODO: deflip64(gesture.id);
+	deflip32(gesture.num_strokes);
 
 	int gesture_id = PG_EXEC_PARAMS(conn,
 		"INSERT INTO gestures (entry_id) VALUES($1::integer) RETURNING id",
@@ -203,7 +203,7 @@ int
 load_gesture_stroke(int fd, PGconn* conn, int gesture_id) {
 	int32_t num_points;
 	GET(fd, num_points);
-	defuck32(num_points);
+	deflip32(num_points);
 
 	int stroke_id = PG_EXEC_PARAMS(conn,
 		"INSERT INTO gesture_strokes (gesture_id) VALUES($1::integer) RETURNING id",
@@ -214,7 +214,7 @@ load_gesture_stroke(int fd, PGconn* conn, int gesture_id) {
 	return 0;
 }
 
-// these are all un-fucked, because they are not really integers
+// these are all un-fliped, because they are not really integers
 struct gesture_point {
 	int32_t x;
 	int32_t y;
@@ -264,46 +264,46 @@ download(int fd, PGconn *conn, int id) {
 	fprintf(stderr, "%d, %d, %d, %d\n\n", num_entries, num_gestures, num_strokes, num_points);
 
 	uint32_t num_entries = PQntuples(entries);
-	refuck32(num_entries);
+	reflip32(num_entries);
 	nwrite(fd, &num_entries, sizeof(num_entries));
-	defuck32(num_entries);
+	deflip32(num_entries);
 
 	for (size_t i = 0; i < num_entries; i++) {
 		buf = PQgetvalue(entries, i, fnum_name);
 		uint16_t len = strlen(buf);
-		refuck16(len);
+		reflip16(len);
 		nwrite(fd, &len, sizeof(len));
 		dprintf(fd, "%s", buf);
 		
 		buf = PQgetvalue(entries, i, fnum_id);
 		PGresult *gestures = PG_QUERY(conn, "SELECT id FROM gestures WHERE entry_id = $1::integer", buf);
 		uint32_t num_gestures = PQntuples(gestures);
-		refuck32(num_gestures);
+		reflip32(num_gestures);
 		nwrite(fd, &num_gestures, sizeof(num_gestures));
-		defuck32(num_gestures);
+		deflip32(num_gestures);
 
 		for (size_t j = 0; j < num_gestures; j++) {
 			buf = PQgetvalue(gestures, j, 0);
 
 			uint32_t gesture_id = atoi(buf);
-			refuck32(gesture_id);
+			reflip32(gesture_id);
 			nwrite(fd, "\0\0\0\0", 4);
 			nwrite(fd, &gesture_id, 4);
 
 			PGresult *strokes = PG_QUERY(conn, "SELECT id FROM gesture_strokes WHERE gesture_id = $1::integer", buf);
 			uint32_t num_strokes = PQntuples(strokes);
-			refuck32(num_strokes);
+			reflip32(num_strokes);
 			nwrite(fd, &num_strokes, sizeof(num_strokes));
-			defuck32(num_strokes);
+			deflip32(num_strokes);
 
 			for (size_t k = 0; k < num_strokes; k++) {
 				buf = PQgetvalue(strokes, k, 0);
 
 				PGresult *points = PG_QUERY(conn, "SELECT x, y, time FROM gesture_points WHERE stroke_id = $1::integer", buf);
 				uint32_t num_points = PQntuples(points);
-				refuck32(num_points);
+				reflip32(num_points);
 				nwrite(fd, &num_points, sizeof(num_points));
-				defuck32(num_points);
+				deflip32(num_points);
 				
 				int fnum_x = PQfnumber(points, "x");
 				int fnum_y = PQfnumber(points, "y");
